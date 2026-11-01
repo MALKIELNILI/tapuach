@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>תפוח – שלט הרשמה</title>
+<style>
+  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; direction:rtl; color:#2b2b2b; background:#fff; text-align:center; }
+  .sheet { max-width:700px; margin:0 auto; padding:30px 20px; }
+  .lime { background:#a8c920; color:#fff; border-radius:24px; padding:26px 16px; }
+  h1 { font-size:2.6rem; margin:10px 0 0; }
+  h2 { font-size:1.6rem; margin:14px 0; }
+  p { font-size:1.25rem; line-height:1.5; }
+  #qr { display:flex; justify-content:center; margin:18px 0; }
+  .addr { font-size:1.2rem; color:#555; }
+  @media print { .noprint { display:none; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <div class="lime">
+    <div id="apple"></div>
+    <h1>תפוח</h1>
+    <div>בר מיצים ובריאות</div>
+  </div>
+  <h2>קבלו כרטיס ניקובים</h2>
+  <p>סרקו את הקוד, מלאו שם וטלפון,<br>וקבלו חותמת על כל רכישה.</p>
+  <div id="qr"></div>
+  <p class="addr">החשמונאים 91, תל אביב</p>
+  <button class="noprint" onclick="window.print()" style="padding:12px 22px;font-size:1.1rem;background:#a8c920;color:#fff;border:none;border-radius:10px;cursor:pointer">🖨️ הדפסה</button>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script type="module">
+import { SITE_URL, appleSvg } from "./shared.js";
+document.getElementById("apple").innerHTML = appleSvg("#fff", 70);
+new QRCode(document.getElementById("qr"), { text: SITE_URL, width: 300, height: 300, colorDark: "#2b2b2b", colorLight: "#ffffff" });
+</script>
+</body>
+</html>

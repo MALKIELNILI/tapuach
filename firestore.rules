@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // הבעלים בלבד: מזהה לפי חשבון הסיסמה של מסך הקופה
+    function isOwner() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.auth.token.email == 'tapuach-owner@example.com';
+    }
+
+    // הגדרות העסק: קריאה לכולם, שינוי לבעלים בלבד
+    match /tapuach_config/{docId} {
+      allow read: if true;
+      allow write: if isOwner();
+    }
+
+    // כרטיסים: לקוח נרשם (אנונימי) עם יתרות אפס, קריאה לפי מזהה בלבד, רשימה לבעלים
+    match /tapuach_cards/{cardId} {
+      allow get: if true;
+      allow list: if isOwner();
+      allow create: if request.auth != null
+        && request.resource.data.stamps == 0
+        && request.resource.data.benefits == 0
+        && request.resource.data.rewardsEarned == 0
+        && request.resource.data.redeemed == 0;
+      allow update, delete: if isOwner();
+    }
+
+    // אינדקס טלפון -> מזהה כרטיס (לשחזור). קריאה לפי טלפון בלבד, יצירה לנרשם, שינוי לבעלים
+    match /tapuach_phones/{phone} {
+      allow get: if true;
+      allow create: if request.auth != null;
+      allow update, delete: if isOwner();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

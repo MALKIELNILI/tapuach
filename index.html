@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#a8c920">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>תפוח – כרטיס ניקובים</title>
+<style id="base"></style>
+</head>
+<body>
+<header>
+  <div id="logo"></div>
+  <h1>תפוח – בר מיצים ובריאות</h1>
+  <small>החשמונאים 91, תל אביב</small>
+</header>
+
+<main id="app"></main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script type="module">
+import { auth, db, SITE_URL, DEFAULT_CONFIG, BASE_CSS, appleSvg, randomCardId, cleanPhone, showMsg } from "./shared.js";
+import { signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+import { doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+document.getElementById("base").textContent = BASE_CSS;
+document.getElementById("logo").innerHTML = appleSvg("#fff", 44);
+const app = document.getElementById("app");
+const cardId = new URLSearchParams(location.search).get("c");
+
+let config = { ...DEFAULT_CONFIG };
+getDoc(doc(db, "tapuach_config", "main")).then(s => { if (s.exists()) config = { ...DEFAULT_CONFIG, ...s.data() }; }).finally(() => {
+  if (cardId) showCard(cardId); else showRegister();
+});
+
+function showRegister() {
+  app.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">קבלו כרטיס ניקובים</h2>
+      <p class="muted">מלאו שם וטלפון. אחרי כל רכישה נוסיף לכם חותמת, וכשיש ${config.stampsNeeded} חותמות תקבלו: ${config.rewardText}.</p>
+      <label for="name">שם מלא</label>
+      <input id="name" autocomplete="name">
+      <label for="phone">טלפון</label>
+      <input id="phone" type="tel" inputmode="tel" autocomplete="tel">
+      <button id="go">הרשמה</button>
+      <div id="msg" class="msg"></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">איבדתם את הכרטיס?</h3>
+      <p class="muted">הזינו את מספר הטלפון שנרשמתם איתו, והכרטיס ייפתח מחדש.</p>
+      <label for="rphone">טלפון</label>
+      <input id="rphone" type="tel" inputmode="tel">
+      <button id="restore" class="secondary">שחזור כרטיס</button>
+      <div id="rmsg" class="msg"></div>
+    </div>`;
+  const msg = document.getElementById("msg");
+  document.getElementById("go").onclick = () => register(msg);
+  document.getElementById("restore").onclick = () => restore(document.getElementById("rmsg"));
+}
+
+function randomId() { return randomCardId(8); }
+
+async function register(msg) {
+  const name = document.getElementById("name").value.trim();
+  const phone = cleanPhone(document.getElementById("phone").value);
+  if (!name) return showMsg(msg, "נא להזין שם", true);
+  if (phone.length < 9) return showMsg(msg, "נא להזין מספר טלפון תקין", true);
+  try {
+    await signInAnonymously(auth);
+    const phoneRef = doc(db, "tapuach_phones", phone);
+    const existing = await getDoc(phoneRef);
+    if (existing.exists()) {
+      location.href = "?c=" + existing.data().cardId;
+      return;
+    }
+    const id = randomId();
+    await setDoc(doc(db, "tapuach_cards", id), {
+      name, phone, stamps: 0, benefits: 0, rewardsEarned: 0, redeemed: 0, createdAt: serverTimestamp(),
+    });
+    await setDoc(phoneRef, { cardId: id });
+    location.href = "?c=" + id;
+  } catch (e) {
+    console.error(e);
+    showMsg(msg, "ההרשמה לא הצליחה. נסו שוב.", true);
+  }
+}
+
+async function restore(msg) {
+  const phone = cleanPhone(document.getElementById("rphone").value);
+  if (phone.length < 9) return showMsg(msg, "נא להזין מספר טלפון תקין", true);
+  try {
+    const s = await getDoc(doc(db, "tapuach_phones", phone));
+    if (!s.exists()) return showMsg(msg, "לא נמצא כרטיס עם הטלפון הזה", true);
+    location.href = "?c=" + s.data().cardId;
+  } catch (e) {
+    console.error(e);
+    showMsg(msg, "השחזור לא הצליח. נסו שוב.", true);
+  }
+}
+
+function showCard(id) {
+  app.innerHTML = `<div class="card" id="cardBox"><p class="muted">טוען את הכרטיס...</p></div>`;
+  onSnapshot(doc(db, "tapuach_cards", id), snap => {
+    const box = document.getElementById("cardBox");
+    if (!snap.exists()) {
+      box.innerHTML = `<p>הכרטיס לא נמצא. אפשר להירשם מחדש מהעמוד הראשי.</p><a href="${SITE_URL}">להרשמה</a>`;
+      return;
+    }
+    const d = snap.data();
+    const need = config.stampsNeeded;
+    let stamps = "";
+    for (let i = 0; i < need; i++) {
+      stamps += `<div class="stamp ${i < d.stamps ? "on" : ""}">${i < d.stamps ? appleSvg("#a8c920", 30) : ""}</div>`;
+    }
+    box.innerHTML = `
+      <div class="row"><div><div class="muted">כרטיס ניקובים</div><div class="big">${escapeHtml(d.name)}</div></div>${appleSvg("#a8c920", 40)}</div>
+      <div class="muted">מספר כרטיס: <b>${id}</b></div>
+      <div class="stamps">${stamps}</div>
+      <div class="row"><span>חותמות: <b>${d.stamps}</b> מתוך ${need}</span></div>
+      <div style="margin-top:12px" class="${d.benefits > 0 ? "" : "muted"}">
+        ${d.benefits > 0 ? `🎉 יש לכם <b>${d.benefits}</b> הטבה/ות: ${escapeHtml(config.rewardText)}. הציגו את המסך בקופה.` : `הטבה: ${escapeHtml(config.rewardText)} אחרי ${need} חותמות`}
+      </div>
+      <div id="qr" style="display:flex;justify-content:center;margin:16px 0"></div>
+      <p class="muted" style="text-align:center">הציגו את הקוד הזה בקופה</p>
+      <hr>
+      <h3>להוספה למסך הבית</h3>
+      <p class="muted"><b>באייפון:</b> פתחו את הכרטיס ב-Safari, לחצו על כפתור השיתוף (ריבוע עם חץ למעלה), ואז "הוסף למסך הבית".</p>
+      <p class="muted"><b>באנדרואיד:</b> פתחו את הכרטיס ב-Chrome, לחצו על שלוש הנקודות, ואז "הוסף למסך הבית".</p>`;
+    if (!document.getElementById("qrbox")) {
+      const qrHolder = document.getElementById("qr");
+      new QRCode(qrHolder, { text: `${SITE_URL}?c=${id}`, width: 180, height: 180, colorDark: "#2b2b2b", colorLight: "#ffffff" });
+    }
+  });
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+</script>
+</body>
+</html>

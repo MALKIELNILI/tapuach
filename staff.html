@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>תפוח – מסך קופה</title>
+<style id="base"></style>
+<style>
+  #scanBox { position:relative; background:#000; border-radius:14px; overflow:hidden; display:none; }
+  #scanBox video { width:100%; display:block; }
+  .big-btn { font-size:1.25rem; padding:18px; }
+  .stat { text-align:center; flex:1; }
+  .stat b { display:block; font-size:1.5rem; color:var(--lime-dark); }
+  .actions button { margin-top:8px; }
+  details summary { cursor:pointer; font-weight:700; padding:6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div id="logo"></div>
+  <h1>מסך קופה – תפוח</h1>
+</header>
+<main id="app"></main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<script type="module">
+import { auth, db, OWNER_EMAIL, DEFAULT_CONFIG, BASE_CSS, appleSvg, showMsg } from "./shared.js";
+import { signInWithEmailAndPassword, signOut, updatePassword, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+import { doc, getDoc, setDoc, getDocs, collection, onSnapshot, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+document.getElementById("base").textContent = BASE_CSS;
+document.getElementById("logo").innerHTML = appleSvg("#fff", 40);
+const app = document.getElementById("app");
+const configRef = doc(db, "tapuach_config", "main");
+let config = { ...DEFAULT_CONFIG };
+let stopCamera = null;
+let stopWatch = null;
+
+onAuthStateChanged(auth, async user => {
+  if (!user) return showLogin();
+  config = { ...DEFAULT_CONFIG, ...((await getDoc(configRef)).data() || {}) };
+  showMain();
+});
+
+function showLogin() {
+  app.innerHTML = `
+    <div class="card">
+      <h2 style="margin-top:0">כניסה לקופה</h2>
+      <label for="code">קוד סודי</label>
+      <input id="code" type="password" autocomplete="current-password">
+      <button id="login">כניסה</button>
+      <div id="msg" class="msg"></div>
+    </div>`;
+  const msg = document.getElementById("msg");
+  const go = async () => {
+    try {
+      await signInWithEmailAndPassword(auth, OWNER_EMAIL, document.getElementById("code").value);
+    } catch (e) {
+      showMsg(msg, "הקוד לא נכון", true);
+    }
+  };
+  document.getElementById("login").onclick = go;
+  document.getElementById("code").onkeydown = e => { if (e.key === "Enter") go(); };
+}
+
+function showMain() {
+  app.innerHTML = `
+    <div class="card">
+      <button id="scanBtn" class="big-btn">📷 סרוק לקוח</button>
+      <div id="scanBox" style="margin-top:12px"><video id="video" playsinline muted></video></div>
+      <div id="scanMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <label for="q">חיפוש לקוח (שם או טלפון)</label>
+      <input id="q" placeholder="הקלידו שם או טלפון">
+      <div id="results"></div>
+    </div>
+
+    <div class="card" id="panel" style="display:none"></div>
+
+    <div class="card">
+      <details id="statsBox"><summary>סטטיסטיקה</summary><div id="stats" class="muted">טוען...</div></details>
+    </div>
+
+    <div class="card">
+      <details><summary>הגדרות</summary>
+        <label for="need">מספר חותמות להטבה</label>
+        <input id="need" type="number" min="1" max="30" value="${config.stampsNeeded}">
+        <label for="reward">נוסח ההטבה</label>
+        <input id="reward" value="${config.rewardText}">
+        <button id="saveCfg" class="secondary">שמירת הגדרות</button>
+        <label for="newCode">קוד סודי חדש (לפחות 6 תווים)</label>
+        <input id="newCode" type="password" autocomplete="new-password">
+        <button id="saveCode" class="secondary">החלפת הקוד</button>
+        <div id="cfgMsg" class="msg"></div>
+      </details>
+    </div>
+
+    <div class="card">
+      <a href="print.html" target="_blank" style="font-weight:700;color:#7d9a12">🖨️ עמוד שלט להדפסה (QR להרשמה)</a>
+      <button id="logout" class="danger" style="margin-top:14px">יציאה</button>
+    </div>`;
+
+  document.getElementById("scanBtn").onclick = startScan;
+  document.getElementById("q").oninput = search;
+  document.getElementById("saveCfg").onclick = saveConfig;
+  document.getElementById("saveCode").onclick = changeCode;
+  document.getElementById("logout").onclick = () => signOut(auth);
+  document.getElementById("statsBox").addEventListener("toggle", e => { if (e.target.open) loadStats(); });
+  loadStats();
+}
+
+// ---------- סריקה ----------
+async function startScan() {
+  if (stopCamera) return stopScan();
+  const box = document.getElementById("scanBox");
+  const video = document.getElementById("video");
+  const msg = document.getElementById("scanMsg");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream;
+    await video.play();
+    box.style.display = "block";
+    document.getElementById("scanBtn").textContent = "עצור סריקה";
+    showMsg(msg, "כוונו את המצלמה אל ה-QR של הלקוח");
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    let running = true;
+    const tick = () => {
+      if (!running) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(img.data, img.width, img.height);
+        if (code) {
+          const m = code.data.match(/[?&]c=([a-z0-9]+)/i);
+          if (m) {
+            stopScan();
+            openCard(m[1]);
+            return;
+          }
+          showMsg(msg, "ה-QR הזה אינו של תפוח", true);
+        }
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    stopCamera = () => { running = false; stream.getTracks().forEach(t => t.stop()); };
+  } catch (e) {
+    console.error(e);
+    showMsg(msg, "לא הצלחתי להפעיל את המצלמה. בדקו הרשאות.", true);
+  }
+}
+
+function stopScan() {
+  if (stopCamera) stopCamera();
+  stopCamera = null;
+  document.getElementById("scanBox").style.display = "none";
+  document.getElementById("scanBtn").textContent = "📷 סרוק לקוח";
+}
+
+// ---------- חיפוש ----------
+let allCards = null;
+async function loadCards() {
+  const snap = await getDocs(collection(db, "tapuach_cards"));
+  allCards = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  return allCards;
+}
+
+async function search() {
+  const q = document.getElementById("q").value.trim();
+  const box = document.getElementById("results");
+  if (!q) { box.innerHTML = ""; return; }
+  const cards = allCards || await loadCards();
+  const digits = q.replace(/\D/g, "");
+  const hits = cards.filter(c => c.name.includes(q) || (digits && c.phone.includes(digits))).slice(0, 30);
+  box.innerHTML = hits.map(c => `<div class="list-item" data-id="${c.id}"><b>${escapeHtml(c.name)}</b> <span class="muted">${c.phone}</span> · חותמות ${c.stamps}/${config.stampsNeeded}${c.benefits ? " · 🎁 " + c.benefits : ""}</div>`).join("") || `<p class="muted">לא נמצאו לקוחות</p>`;
+  box.querySelectorAll(".list-item").forEach(el => el.onclick = () => openCard(el.dataset.id));
+}
+
+// ---------- כרטיס לקוח ----------
+function openCard(id) {
+  const panel = document.getElementById("panel");
+  panel.style.display = "block";
+  panel.innerHTML = `<p class="muted">טוען...</p>`;
+  if (stopWatch) stopWatch();
+  stopWatch = onSnapshot(doc(db, "tapuach_cards", id), snap => {
+    if (!snap.exists()) { panel.innerHTML = `<p>הכרטיס לא נמצא</p>`; return; }
+    const d = snap.data();
+    const need = config.stampsNeeded;
+    panel.innerHTML = `
+      <div class="row"><div><div class="big">${escapeHtml(d.name)}</div><div class="muted">${d.phone} · כרטיס ${id}</div></div>${appleSvg("#a8c920", 34)}</div>
+      <div class="stamps">${Array.from({ length: need }, (_, i) => `<div class="stamp ${i < d.stamps ? "on" : ""}">${i < d.stamps ? appleSvg("#a8c920", 28) : ""}</div>`).join("")}</div>
+      <div class="row"><span>חותמות <b>${d.stamps}</b> מתוך ${need}</span><span>הטבות לניצול: <b>${d.benefits}</b></span></div>
+      <div id="pmsg" class="msg"></div>
+      <div class="actions">
+        <button id="addStamp">➕ הוסף חותמת</button>
+        <button id="cancelStamp" class="secondary">↩️ ביטול חותמת</button>
+        <button id="redeem" class="secondary" ${d.benefits > 0 ? "" : "disabled"}>🎁 מימוש הטבה (${escapeHtml(config.rewardText)})</button>
+      </div>`;
+    const pmsg = document.getElementById("pmsg");
+    document.getElementById("addStamp").onclick = () => addStamp(id, pmsg);
+    document.getElementById("cancelStamp").onclick = () => changeStamps(id, pmsg, -1);
+    document.getElementById("redeem").onclick = () => redeem(id, pmsg);
+  });
+}
+
+async function addStamp(id, msg) {
+  const ref = doc(db, "tapuach_cards", id);
+  try {
+    const reward = await runTransaction(db, async tx => {
+      const d = (await tx.get(ref)).data();
+      let stamps = d.stamps + 1;
+      let benefits = d.benefits;
+      let rewardsEarned = d.rewardsEarned;
+      let won = false;
+      if (stamps >= config.stampsNeeded) {
+        stamps = 0;
+        benefits += 1;
+        rewardsEarned += 1;
+        won = true;
+      }
+      tx.update(ref, { stamps, benefits, rewardsEarned });
+      return won;
+    });
+    showMsg(msg, reward ? "🎉 הלקוח זכה!" : "החותמת נוספה");
+  } catch (e) {
+    console.error(e);
+    showMsg(msg, "שגיאה בהוספת החותמת", true);
+  }
+}
+
+async function changeStamps(id, msg, delta) {
+  const ref = doc(db, "tapuach_cards", id);
+  try {
+    await runTransaction(db, async tx => {
+      const d = (await tx.get(ref)).data();
+      if (d.stamps + delta < 0) throw new Error("אין חותמות לבטל");
+      tx.update(ref, { stamps: d.stamps + delta });
+    });
+    showMsg(msg, "החותמת בוטלה");
+  } catch (e) {
+    showMsg(msg, e.message === "אין חותמות לבטל" ? e.message : "שגיאה בביטול", true);
+  }
+}
+
+async function redeem(id, msg) {
+  const ref = doc(db, "tapuach_cards", id);
+  try {
+    await runTransaction(db, async tx => {
+      const d = (await tx.get(ref)).data();
+      if (d.benefits <= 0) throw new Error("אין הטבה למימוש");
+      tx.update(ref, { benefits: d.benefits - 1, redeemed: d.redeemed + 1 });
+    });
+    showMsg(msg, "ההטבה מומשה");
+  } catch (e) {
+    showMsg(msg, e.message === "אין הטבה למימוש" ? e.message : "שגיאה במימוש", true);
+  }
+}
+
+// ---------- סטטיסטיקה והגדרות ----------
+async function loadStats() {
+  const cards = await loadCards();
+  const sum = k => cards.reduce((s, c) => s + (c[k] || 0), 0);
+  document.getElementById("stats").innerHTML = `
+    <div class="row">
+      <div class="stat"><b>${cards.length}</b>לקוחות</div>
+      <div class="stat"><b>${sum("rewardsEarned")}</b>הטבות שנצברו</div>
+      <div class="stat"><b>${sum("redeemed")}</b>מומשו</div>
+      <div class="stat"><b>${sum("benefits")}</b>ממתינות</div>
+    </div>`;
+}
+
+async function saveConfig() {
+  const need = parseInt(document.getElementById("need").value, 10);
+  const rewardText = document.getElementById("reward").value.trim();
+  const msg = document.getElementById("cfgMsg");
+  if (!need || need < 1 || need > 30 || !rewardText) return showMsg(msg, "נא למלא מספר חותמות בין 1 ל-30 ונוסח הטבה", true);
+  try {
+    await setDoc(configRef, { stampsNeeded: need, rewardText }, { merge: true });
+    config = { ...config, stampsNeeded: need, rewardText };
+    showMsg(msg, "ההגדרות נשמרו");
+  } catch (e) {
+    showMsg(msg, "השמירה לא הצליחה", true);
+  }
+}
+
+async function changeCode() {
+  const code = document.getElementById("newCode").value;
+  const msg = document.getElementById("cfgMsg");
+  if (code.length < 6) return showMsg(msg, "הקוד חייב להיות לפחות 6 תווים", true);
+  try {
+    await updatePassword(auth.currentUser, code);
+    document.getElementById("newCode").value = "";
+    showMsg(msg, "הקוד הסודי הוחלף");
+  } catch (e) {
+    showMsg(msg, "לא הצלחתי להחליף. נסו להתחבר מחדש ואז לנסות שוב.", true);
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+</script>
+</body>
+</html>
