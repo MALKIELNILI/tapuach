@@ -38,7 +38,8 @@ let stopCamera = null;
 let stopWatch = null;
 
 onAuthStateChanged(auth, async user => {
-  if (!user) return showLogin();
+  // מי שנכנס אנונימית (לקוח שנרשם באותו דפדפן) אינו הבעלים
+  if (!user || user.isAnonymous || user.email !== OWNER_EMAIL) return showLogin();
   config = { ...DEFAULT_CONFIG, ...((await getDoc(configRef)).data() || {}) };
   showMain();
 });
