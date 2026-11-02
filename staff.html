@@ -228,6 +228,8 @@ async function addStamp(id, msg) {
       tx.update(ref, { stamps, benefits, rewardsEarned });
       return won;
     });
+    // הודעת זכייה מופיעה גם אחרי שהכרטיס מתרענן, לכן עם חלונית
+    if (reward) alert("🎉 הלקוח זכה!");
     showMsg(msg, reward ? "🎉 הלקוח זכה!" : "החותמת נוספה");
   } catch (e) {
     console.error(e);
